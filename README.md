@@ -31,8 +31,8 @@ An AI-powered academic research assistant that generates complete IEEE-format La
 
 ### 1. Clone the repository
 ```bash
-git clone https://github.com/YOUR_USERNAME/acadbot.git
-cd acadbot
+git clone https://github.com/NANDINI502/Acadbot.git
+cd Acadbot
 ```
 
 ### 2. Install dependencies
