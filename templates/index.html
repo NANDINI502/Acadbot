@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Acadbot</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+    <div class="app-container">
+
+        <!-- =================== SIDEBAR =================== -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="sidebar-logo">🧬</div>
+                <span class="sidebar-title">Acadbot</span>
+            </div>
+
+            <button class="new-chat-btn" onclick="newChat()">+ New Chat</button>
+
+            <div class="sidebar-section-title">Recent</div>
+            <div class="chat-history" id="chat-history-list">
+                <div style="color:var(--text-muted); font-size:0.82rem; padding:8px;">No chats yet</div>
+            </div>
+        </aside>
+
+        <!-- =================== MAIN =================== -->
+        <main class="main-content">
+
+            <!-- TOP BAR -->
+            <div class="top-bar">
+                <span class="top-bar-title" id="top-bar-title">Welcome</span>
+                <div class="status-badge">
+                    <div class="status-dot"></div>
+                    Online
+                </div>
+            </div>
+
+            <!-- ====== WELCOME SCREEN ====== -->
+            <div class="welcome-screen" id="welcome-screen">
+                <div class="welcome-icon">🧬</div>
+                <div class="welcome-title">Welcome to Acadbot</div>
+                <div class="welcome-sub">
+                    Your AI-powered research assistant. Write your thesis, visualize data & architectures,
+                    and ask questions about your documents.
+                </div>
+
+                <div class="cards-grid">
+                    <div class="mode-card" onclick="switchMode('thesis')">
+                        <span class="card-icon">📝</span>
+                        <div class="card-title">Thesis Writer</div>
+                        <div class="card-desc">Generate full LaTeX thesis papers using Qwen + Gemini with word-by-word
+                            streaming</div>
+                    </div>
+                    <div class="mode-card" onclick="switchMode('visualizer')">
+                        <span class="card-icon">📊</span>
+                        <div class="card-title">Visualizer</div>
+                        <div class="card-desc">Charts, graphs & 3D architecture diagrams</div>
+                    </div>
+                    <div class="mode-card" onclick="switchMode('documents')">
+                        <span class="card-icon">📄</span>
+                        <div class="card-title">Document Reader</div>
+                        <div class="card-desc">Upload & chat with your PDF / text files</div>
+                    </div>
+                    <div class="mode-card" onclick="switchMode('welcome')">
+                        <span class="card-icon">💡</span>
+                        <div class="card-title">About</div>
+                        <div class="card-desc">Powered by Qwen, Gemini & VisualKeras</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ====== THESIS WRITER CHAT ====== -->
+            <div class="chat-view" id="thesis-view">
+                <div class="chat-header">
+                    <button class="back-btn" onclick="switchMode('welcome')">← Back</button>
+                    <span class="chat-mode-title">📝 Thesis Writer</span>
+                </div>
+                <div class="messages-container" id="thesis-messages"></div>
+                <div class="input-bar">
+                    <div class="input-wrapper">
+                        <input type="text" class="chat-input" id="thesis-input"
+                            placeholder="Enter your thesis topic, e.g. 'Chest X-ray classification using DenseNet121'"
+                            onkeydown="handleKey(event, 'thesis')">
+                        <button class="send-btn" onclick="sendThesis()">➤</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ====== VISUALIZER CHAT ====== -->
+            <div class="chat-view" id="visualizer-view">
+                <div class="chat-header">
+                    <button class="back-btn" onclick="switchMode('welcome')">← Back</button>
+                    <span class="chat-mode-title">📊 Visualizer</span>
+                </div>
+                <div class="messages-container" id="visualizer-messages"></div>
+                <div class="input-bar">
+                    <div class="input-wrapper">
+                        <input type="file" class="file-upload-input" id="viz-file" accept=".csv,.json">
+                        <button class="file-upload-btn" onclick="triggerFileUpload('viz-file')">📎</button>
+                        <input type="text" class="chat-input" id="viz-input"
+                            placeholder="Plot publications per year // Visualize ResNet50..."
+                            onkeydown="handleKey(event, 'visualizer')">
+                        <button class="send-btn" onclick="sendVisualizer()">➤</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ====== DOCUMENT READER CHAT ====== -->
+            <div class="chat-view" id="documents-view">
+                <div class="chat-header">
+                    <button class="back-btn" onclick="switchMode('welcome')">← Back</button>
+                    <span class="chat-mode-title">📄 Document Reader</span>
+                </div>
+                <div class="messages-container" id="documents-messages"></div>
+                <div class="input-bar">
+                    <div class="input-wrapper">
+                        <input type="file" class="file-upload-input" id="doc-file" accept=".pdf,.txt,.json,.csv">
+                        <button class="file-upload-btn" onclick="triggerFileUpload('doc-file')">📎</button>
+                        <input type="text" class="chat-input" id="doc-input"
+                            placeholder="Upload a document, then ask questions..."
+                            onkeydown="handleKey(event, 'documents')">
+                        <button class="send-btn" onclick="sendDocument()">➤</button>
+                    </div>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <script src="/static/script.js"></script>
+</body>
+
+</html>

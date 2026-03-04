@@ -1,0 +1,51 @@
+# Acadbot - AI Research Thesis Writer
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Environment
+.env
+venv/
+.venv/
+env/
+
+# Model weights (too large for GitHub)
+qwen-xray-researcher/
+
+# Large datasets
+literature_dataset.json
+research_qa_dataset.jsonl
+
+# Vector DB
+chroma_db/
+
+# Logs and temp files
+*.log
+*.info
+drafts/
+drafts.log
+output.log
+output.info
+
+# Downloaded data
+pmc_data_rag/
+sample_images/
+
+# Generated files
+test_diagram_output.png
+qwen_thesis_draft.md
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
