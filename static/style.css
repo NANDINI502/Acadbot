@@ -1,5 +1,5 @@
 /* ============================================================
-   AI RESEARCH STUDIO — DARK THEME
+   AI RESEARCH STUDIO — DARK THEME (AMBER/ORANGE ACCENT)
    ============================================================ */
 
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
@@ -11,21 +11,21 @@
 }
 
 :root {
-    --bg-primary: #0a0a1a;
-    --bg-secondary: #111128;
-    --bg-sidebar: #0e0e24;
-    --bg-card: #161635;
-    --bg-card-hover: #1c1c42;
-    --bg-input: #1a1a3a;
-    --bg-user-bubble: #7c3aed;
-    --bg-bot-bubble: #1e1e40;
-    --text-primary: #e8e8f0;
-    --text-secondary: #9090b0;
-    --text-muted: #606080;
-    --accent: #7c3aed;
-    --accent-hover: #6d28d9;
-    --accent-glow: rgba(124, 58, 237, 0.3);
-    --border: #2a2a4a;
+    --bg-primary: #121008;
+    --bg-secondary: #1a1408;
+    --bg-sidebar: #141004;
+    --bg-card: #1e1810;
+    --bg-card-hover: #2a2018;
+    --bg-input: #1c1610;
+    --bg-user-bubble: #e67e22;
+    --bg-bot-bubble: #1e1a12;
+    --text-primary: #f0ece4;
+    --text-secondary: #b0a890;
+    --text-muted: #807060;
+    --accent: #e67e22;
+    --accent-hover: #d35400;
+    --accent-glow: rgba(230, 126, 34, 0.3);
+    --border: #3a2e1e;
     --success: #22c55e;
     --radius: 14px;
     --radius-sm: 10px;
@@ -66,7 +66,7 @@ body {
 .sidebar-logo {
     width: 36px;
     height: 36px;
-    background: linear-gradient(135deg, #7c3aed, #a855f7);
+    background: linear-gradient(135deg, #e67e22, #f39c12);
     border-radius: 10px;
     display: flex;
     align-items: center;
@@ -82,7 +82,7 @@ body {
 .new-chat-btn {
     width: 100%;
     padding: 12px;
-    background: linear-gradient(135deg, #7c3aed, #a855f7);
+    background: linear-gradient(135deg, #e67e22, #f39c12);
     border: none;
     border-radius: var(--radius-sm);
     color: white;
@@ -94,7 +94,7 @@ body {
 }
 
 .new-chat-btn:hover {
-    background: linear-gradient(135deg, #6d28d9, #9333ea);
+    background: linear-gradient(135deg, #d35400, #e08e0b);
     transform: translateY(-1px);
     box-shadow: 0 4px 15px var(--accent-glow);
 }
