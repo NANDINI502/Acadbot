@@ -5,16 +5,39 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Acadbot</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/quantum.css?v=3">
+    <!-- Firebase SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
 </head>
 
 <body>
-    <div class="app-container">
+    <!-- Animated Backgrounds -->
+    <div class="animated-bg"></div>
+    <canvas id="tech-particles"
+        style="position:fixed; top:0; left:0; width:100vw; height:100vh; z-index:-2; opacity:0.3; pointer-events:none;"></canvas>
+
+    <!-- =================== LOGIN SCREEN =================== -->
+    <div id="login-container" class="login-container">
+        <div class="login-card holographic-border">
+            <div class="login-logo">◈</div>
+            <h1 class="login-title">Acadbot Network</h1>
+            <p class="login-subtitle">Authenticate to access the research mainframe.</p>
+            <button id="google-login-btn" class="google-login-btn" onclick="signInWithGoogle()">
+                <img src="https://upload.wikimedia.org/wikipedia/commons/c/c1/Google_%22G%22_logo.svg" alt="Google Logo"
+                    class="google-icon">
+                Sign in with Google
+            </button>
+        </div>
+    </div>
+
+    <!-- MAIN APP CONTAINER (Hidden on load) -->
+    <div class="app-container" id="app-container" style="display: none;">
 
         <!-- =================== SIDEBAR =================== -->
         <aside class="sidebar">
             <div class="sidebar-header">
-                <div class="sidebar-logo">🧬</div>
+                <div class="sidebar-logo">◈</div>
                 <span class="sidebar-title">Acadbot</span>
             </div>
 
@@ -32,15 +55,22 @@
             <!-- TOP BAR -->
             <div class="top-bar">
                 <span class="top-bar-title" id="top-bar-title">Welcome</span>
-                <div class="status-badge">
-                    <div class="status-dot"></div>
-                    Online
+                <div class="top-bar-right">
+                    <div class="status-badge" style="margin-right: 15px;">
+                        <div class="status-dot"></div>
+                        Online
+                    </div>
+                    <div class="user-profile" onclick="signOutUser()">
+                        <img id="user-avatar" src="" alt="User" class="avatar-img" style="display:none;">
+                        <span id="user-name">Guest</span>
+                        <span class="logout-tooltip">Log Out</span>
+                    </div>
                 </div>
             </div>
 
             <!-- ====== WELCOME SCREEN ====== -->
             <div class="welcome-screen" id="welcome-screen">
-                <div class="welcome-icon">🧬</div>
+                <div class="welcome-icon">◈</div>
                 <div class="welcome-title">Welcome to Acadbot</div>
                 <div class="welcome-sub">
                     Your AI-powered research assistant. Write your thesis, visualize data & architectures,
@@ -120,7 +150,7 @@
                         <input type="file" class="file-upload-input" id="doc-file" accept=".pdf,.txt,.json,.csv">
                         <button class="file-upload-btn" onclick="triggerFileUpload('doc-file')">📎</button>
                         <input type="text" class="chat-input" id="doc-input"
-                            placeholder="Upload a document, then ask questions..."
+                            placeholder="Upload a document, or directly ask about the medical literature..."
                             onkeydown="handleKey(event, 'documents')">
                         <button class="send-btn" onclick="sendDocument()">➤</button>
                     </div>
@@ -130,7 +160,67 @@
         </main>
     </div>
 
-    <script src="/static/script.js"></script>
+    <script src="/static/script.js?v=4"></script>
+    <script>
+        // Unique Tech Particle Network
+        const canvas = document.getElementById('tech-particles');
+        const ctx = canvas.getContext('2d');
+        let width, height, particles = [];
+
+        function resize() {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        class Particle {
+            constructor() {
+                this.x = Math.random() * width;
+                this.y = Math.random() * height;
+                this.vx = (Math.random() - 0.5) * 0.5;
+                this.vy = (Math.random() - 0.5) * 0.5;
+                this.radius = Math.random() * 2 + 0.5;
+            }
+            update() {
+                this.x += this.vx; this.y += this.vy;
+                if (this.x < 0 || this.x > width) this.vx *= -1;
+                if (this.y < 0 || this.y > height) this.vy *= -1;
+            }
+            draw() {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = 'rgba(0, 243, 255, 0.5)';
+                ctx.fill();
+            }
+        }
+
+        for (let i = 0; i < 60; i++) particles.push(new Particle());
+
+        function animate() {
+            ctx.clearRect(0, 0, width, height);
+            for (let i = 0; i < particles.length; i++) {
+                particles[i].update();
+                particles[i].draw();
+                for (let j = i + 1; j < particles.length; j++) {
+                    let dx = particles[i].x - particles[j].x;
+                    let dy = particles[i].y - particles[j].y;
+                    let dist = Math.sqrt(dx * dx + dy * dy);
+                    if (dist < 150) {
+                        ctx.beginPath();
+                        ctx.moveTo(particles[i].x, particles[i].y);
+                        ctx.lineTo(particles[j].x, particles[j].y);
+                        // Neon circuit color bridging
+                        ctx.strokeStyle = `rgba(0, 243, 255, ${1 - dist / 150})`;
+                        ctx.lineWidth = 0.5;
+                        ctx.stroke();
+                    }
+                }
+            }
+            requestAnimationFrame(animate);
+        }
+        animate();
+    </script>
 </body>
 
 </html>

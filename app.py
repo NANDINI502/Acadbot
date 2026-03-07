@@ -2,6 +2,7 @@ import os
 import torch
 import json
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, render_template, request, jsonify, send_file, Response
 from peft import AutoPeftModelForCausalLM
 from transformers import AutoTokenizer
@@ -14,10 +15,68 @@ from dotenv import load_dotenv
 import visualkeras
 import tensorflow as tf
 from collections import defaultdict
+import chromadb
+from sentence_transformers import SentenceTransformer
+import firebase_admin
+from firebase_admin import credentials, auth
+from functools import wraps
+import jwt
 
 load_dotenv()
 
 app = Flask(__name__)
+app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
+app.config['TEMPLATES_AUTO_RELOAD'] = True
+
+# --- Firebase Admin Initialization ---
+try:
+    if os.path.exists("serviceAccountKey.json"):
+        cred = credentials.Certificate("serviceAccountKey.json")
+        firebase_admin.initialize_app(cred)
+    else:
+        firebase_admin.initialize_app(options={'projectId': 'acadbot-dev-01'})
+except ValueError:
+    pass  # Already initialized
+except Exception as e:
+    print(f"Warning: Firebase Admin SDK failed to initialize. Auth won't work: {e}")
+
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        token = None
+        if 'Authorization' in request.headers:
+            auth_header = request.headers['Authorization']
+            if auth_header.startswith('Bearer '):
+                token = auth_header.split('Bearer ')[1]
+        elif 'token' in request.args:
+            token = request.args.get('token')
+            
+        if not token:
+            return jsonify({"error": "Unauthorized. Please authenticate."}), 401
+            
+        try:
+            decoded_token = auth.verify_id_token(token)
+            request.user = decoded_token
+        except Exception as e:
+            if "default credentials were not found" in str(e):
+                print("Warning: Firebase ADC missing. Bypassing signature verification for local dev!")
+                try:
+                    request.user = jwt.decode(token, options={"verify_signature": False})
+                except Exception as decode_e:
+                    return jsonify({"error": f"Invalid token format: {str(decode_e)}"}), 401
+            else:
+                print(f"Token verification failed: {e}")
+                return jsonify({"error": f"Invalid token: {str(e)}"}), 401
+            
+        return f(*args, **kwargs)
+    return decorated_function
+
+@app.after_request
+def add_header(response):
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
 
 # --- Configuration ---
 TEXT_MODEL_DIR = "./qwen-xray-researcher"
@@ -27,6 +86,32 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 # --- Globals ---
 text_tokenizer = None
 text_model = None
+_diagram_model_cache = {}  # Cache built Keras models for diagram generation
+_cached_literature_dataset = None  # Cache 10MB JSON dataset in RAM
+
+# --- ChromaDB + Embedding model for fast reference search ---
+print("Loading embedding model for reference search...")
+_embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+_chroma_client = chromadb.PersistentClient(path="./chroma_db")
+try:
+    _chroma_collection = _chroma_client.get_collection("medical_literature")
+    print(f"ChromaDB loaded: {_chroma_collection.count()} chunks available")
+except Exception:
+    _chroma_collection = None
+    print("ChromaDB collection 'medical_literature' not found — falling back to JSON search")
+
+print("Pre-loading literature dataset into RAM...")
+dataset_path = "literature_dataset.json"
+if os.path.exists(dataset_path):
+    try:
+        if dataset_path.endswith(".csv"):
+            _cached_literature_dataset = pd.read_csv(dataset_path).to_dict(orient="records")
+        else:
+            with open(dataset_path, "r", encoding="utf-8") as f:
+                _cached_literature_dataset = json.load(f)
+        print(f"Loaded {len(_cached_literature_dataset)} records into RAM cache.")
+    except Exception as e:
+        print(f"Failed to cache dataset: {e}")
 
 # ============================================================
 # BACKEND LOGIC (kept from original)
@@ -49,11 +134,14 @@ def load_text_model():
         )
 
         text_tokenizer = AutoTokenizer.from_pretrained(TEXT_MODEL_DIR)
+        
+        # Fine-Tuned PEFT Qwen Model
         text_model = AutoPeftModelForCausalLM.from_pretrained(
             TEXT_MODEL_DIR, 
             device_map="auto",
             quantization_config=bnb_config,
-            low_cpu_mem_usage=True
+            low_cpu_mem_usage=True,
+            attn_implementation="sdpa" # PyTorch 2.0+ Scaled Dot Product Attention
         )
         text_model.eval()
         return True, "Text model loaded successfully!"
@@ -71,24 +159,43 @@ def generate_draft(prompt, max_tokens=800, temperature=0.7):
     input_text = text_tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     inputs = text_tokenizer(input_text, return_tensors="pt").to(text_model.device)
     with torch.no_grad():
-        generated_ids = text_model.generate(
-            **inputs, max_new_tokens=max_tokens, temperature=temperature,
-            do_sample=True, repetition_penalty=1.1
-        )
-    input_len = inputs["input_ids"].shape[1]
-    generated_text = text_tokenizer.batch_decode(generated_ids[:, input_len:], skip_special_tokens=True)[0]
+        from transformers import TextIteratorStreamer
+        streamer = TextIteratorStreamer(text_tokenizer, skip_prompt=True, skip_special_tokens=True)
+        # Run the heavy PyTorch generation in a separate thread so it doesn't block the Flask SSE stream
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(
+                text_model.generate,
+                **inputs, max_new_tokens=max_tokens, temperature=temperature,
+                do_sample=True, repetition_penalty=1.1, streamer=streamer
+            )
+            generated_text = ""
+            for chunk in streamer:
+                generated_text += chunk
+                print(chunk, end="", flush=True)  # Print to terminal so user sees progress
+            print("") # newline
+            future.result()
+            
     return generated_text.split("Keywords:")[0].strip()
 
 def analyze_data(query, dataset_path="literature_dataset.json"):
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key: return None, "🚨 No Gemini API Key found in .env"
-    if not os.path.exists(dataset_path): return None, f"🚨 '{dataset_path}' not found."
+    
+    global _cached_literature_dataset
+    if _cached_literature_dataset is not None:
+        full_data = _cached_literature_dataset
+    else:
+        if not os.path.exists(dataset_path): return None, f"🚨 '{dataset_path}' not found."
+        try:
+            if dataset_path.endswith(".csv"):
+                full_data = pd.read_csv(dataset_path).to_dict(orient="records")
+            else:
+                with open(dataset_path, "r", encoding="utf-8") as f:
+                    full_data = json.load(f)
+        except Exception as e:
+            return None, f"🚨 Error reading dataset: {str(e)}"
+
     try:
-        if dataset_path.endswith(".csv"):
-            full_data = pd.read_csv(dataset_path).to_dict(orient="records")
-        else:
-            with open(dataset_path, "r", encoding="utf-8") as f:
-                full_data = json.load(f)
         sample_data = full_data[:50]
         schema_context = f"List of dicts, {len(full_data)} records."
         prompt = f"""You are an expert Data Scientist analyzing a dataset.
@@ -130,7 +237,23 @@ def generate_model_diagram(model_name):
             "InceptionV3": tf.keras.applications.InceptionV3
         }
         if model_name not in model_map: return None
-        model = model_map[model_name](weights=None, include_top=True)
+
+        # Use cached model if available, otherwise build and cache it
+        if model_name in _diagram_model_cache:
+            print(f"[Diagram] Using cached {model_name} model")
+            model = _diagram_model_cache[model_name]
+        else:
+            print(f"[Diagram] Building {model_name} model (will be cached)...")
+            model = model_map[model_name](weights=None, include_top=True)
+            # Monkey-patch: TF 2.20 removed output_shape from InputLayer
+            for layer in model.layers:
+                if not hasattr(layer, 'output_shape'):
+                    try:
+                        layer.output_shape = layer.output.shape
+                    except Exception:
+                        layer.output_shape = (None, 224, 224, 3)
+            _diagram_model_cache[model_name] = model
+
         color_map = defaultdict(dict)
         color_map[tf.keras.layers.Conv2D]['fill'] = '#00f5d4'
         color_map[tf.keras.layers.MaxPooling2D]['fill'] = '#8338ec'
@@ -143,14 +266,6 @@ def generate_model_diagram(model_name):
         color_map[tf.keras.layers.ZeroPadding2D]['fill'] = '#606080'
         color_map[tf.keras.layers.AveragePooling2D]['fill'] = '#3a86ff'
         color_map[tf.keras.layers.Concatenate]['fill'] = '#ffbe0b'
-        
-        # Monkey-patch: TF 2.20 removed output_shape from InputLayer
-        for layer in model.layers:
-            if not hasattr(layer, 'output_shape'):
-                try:
-                    layer.output_shape = layer.output.shape
-                except Exception:
-                    layer.output_shape = (None, 224, 224, 3)
         
         # For large models, hide filler layers so the diagram is readable
         num_layers = len(model.layers)
@@ -258,7 +373,35 @@ def read_document_and_answer(query, file_path):
 # ============================================================
 
 def get_references(query, dataset_path="literature_dataset.json", max_refs=5):
-    """Search the literature dataset for papers relevant to the query."""
+    """Search for relevant references using ChromaDB vector search (fast) with JSON fallback."""
+    # --- Fast path: ChromaDB semantic search ---
+    if _chroma_collection is not None:
+        try:
+            query_embedding = _embedding_model.encode([query]).tolist()
+            results = _chroma_collection.query(
+                query_embeddings=query_embedding,
+                n_results=max_refs * 2  # fetch extra to deduplicate by paper
+            )
+            if results and results['metadatas'] and results['metadatas'][0]:
+                seen_titles = set()
+                refs = "\n\n---\n**References:**\n"
+                ref_count = 0
+                for meta in results['metadatas'][0]:
+                    title = meta.get('title', 'Untitled')
+                    if title in seen_titles:
+                        continue
+                    seen_titles.add(title)
+                    ref_count += 1
+                    pmcid = meta.get('pmcid', '')
+                    refs += f"[{ref_count}] \"{title}.\" (PMC{pmcid})\n"
+                    if ref_count >= max_refs:
+                        break
+                if ref_count > 0:
+                    return refs
+        except Exception as e:
+            print(f"ChromaDB search failed, falling back to JSON: {e}")
+
+    # --- Fallback: keyword scan over JSON ---
     try:
         if not os.path.exists(dataset_path):
             return ""
@@ -330,12 +473,21 @@ def generate_data_chart(topic):
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         return None
-    dataset_path = "literature_dataset.json"
-    if not os.path.exists(dataset_path):
-        return None
+        
+    global _cached_literature_dataset
+    if _cached_literature_dataset is not None:
+        full_data = _cached_literature_dataset
+    else:
+        dataset_path = "literature_dataset.json"
+        if not os.path.exists(dataset_path):
+            return None
+        try:
+            with open(dataset_path, "r", encoding="utf-8") as f:
+                full_data = json.load(f)
+        except Exception:
+            return None
+            
     try:
-        with open(dataset_path, "r", encoding="utf-8") as f:
-            full_data = json.load(f)
         sample_data = full_data[:10]
         prompt = f"""You are an expert Data Scientist. Create a publication/research trend chart.
         Dataset: {len(full_data)} records. Sample: {json.dumps(sample_data, indent=2)}
@@ -365,9 +517,59 @@ def generate_data_chart(topic):
         print(f"Chart generation error: {e}")
     return None
 
-def generate_thesis_stream(topic):
+def generate_thesis_stream(topic, user_name="User"):
     """Generator: Qwen drafts domain content → auto-generates figures → Gemini structures into LaTeX → SSE chunks."""
     import time, uuid
+
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        yield f"data: 🚨 No GEMINI_API_KEY found in .env file.\n\n"
+        yield f"data: [DONE]\n\n"
+        return
+
+    # --- Step 0: Filter Conversational vs Thesis Intent ---
+    try:
+        client = genai.Client(api_key=api_key)
+        
+        # Hyper-fast intent check without streaming
+        intent_prompt = f"""
+        Does the following user input ask to write an academic paper, thesis, or complex research analysis?
+        Input: "{topic}"
+        
+        If it's just asking for topic ideas, making casual conversation, or asking a generic question, output ONLY the word "CHAT".
+        If it's explicitly asking to write a full thesis/paper, output ONLY the word "THESIS".
+        """
+        
+        intent_res = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=intent_prompt
+        ).text.strip().upper()
+        
+        if "THESIS" not in intent_res:
+            # It's a conversational request. Stream the response directly to the user with zero buffering.
+            chat_prompt = f"""
+            You are a helpful AI research assistant named Acadbot. The user's name is {user_name}.
+            They just said: "{topic}"
+            
+            Respond to them directly in a friendly, conversational manner. If they asked for ideas or topics, provide them naturally. Do not write a thesis.
+            """
+            
+            response_stream = client.models.generate_content_stream(
+                model='gemini-2.5-flash',
+                contents=chat_prompt
+            )
+            
+            for chunk in response_stream:
+                if chunk.text:
+                    safe_text = chunk.text.replace('\n', '\\n')
+                    yield f"data: {safe_text}\n\n"
+                    
+            yield f"data: [DONE]\n\n"
+            return
+            
+    except Exception as e:
+        print(f"Intent check failed: {e}")
+        # Proceed to thesis generation if the check fails
 
     session_id = str(uuid.uuid4())[:8]
     figures = []
@@ -379,50 +581,68 @@ def generate_thesis_stream(topic):
         qwen_draft = generate_draft(
             f"Write a detailed academic research analysis on: {topic}. "
             f"Include methodology, findings, and discussion relevant to chest X-ray image classification.",
-            max_tokens=800, temperature=0.7
+            max_tokens=200, temperature=0.7
         )
     except Exception as e:
         qwen_draft = f"[Qwen model unavailable: {str(e)}. Proceeding with Gemini only.]"
     yield f"data: ✅ Domain research ready.\n\n"
     time.sleep(0.1)
 
-    # --- Step 2: Literature references ---
-    yield f"data: 📚 Step 2/5: Fetching literature references...\n\n"
-    refs = get_references(topic)
-    ref_text = refs if refs else "No references found in the literature dataset."
-    yield f"data: ✅ References collected.\n\n"
-    time.sleep(0.1)
+    # --- Steps 2-4: Run in PARALLEL for speed ---
+    yield f"data: 🚀 Steps 2-4: Fetching references, diagram, and chart in parallel...\n\n"
 
-    # --- Step 3: NN architecture diagram ---
-    yield f"data: 🧠 Step 3/5: Generating neural network architecture diagram...\n\n"
     detected_model = detect_nn_model(topic)
-    if detected_model:
+
+    def _fetch_refs():
+        return get_references(topic)
+
+    def _gen_diagram():
+        if not detected_model:
+            return None
         try:
             img = generate_model_diagram(detected_model)
             if img is not None:
-                diagram_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{detected_model}_architecture.png")
-                img.save(diagram_path, format="PNG")
-                figures.append(("architecture.png", diagram_path, f"{detected_model} Architecture Diagram"))
-                yield f"data: ✅ {detected_model} architecture diagram generated.\n\n"
-            else:
-                yield f"data: ⚠️ Could not generate diagram for {detected_model}.\n\n"
+                path = os.path.join(app.config['UPLOAD_FOLDER'], f"{detected_model}_architecture.png")
+                img.save(path, format="PNG")
+                return ("architecture.png", path, f"{detected_model} Architecture Diagram")
         except Exception as e:
-            yield f"data: ⚠️ Diagram error: {str(e)}\n\n"
+            print(f"Diagram error: {e}")
+        return None
+
+    def _gen_chart():
+        try:
+            path = generate_data_chart(topic)
+            if path and os.path.exists(path):
+                return ("literature_trends.png", path, "Literature Research Trends")
+        except Exception as e:
+            print(f"Chart error: {e}")
+        return None
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        fut_refs = executor.submit(_fetch_refs)
+        fut_diagram = executor.submit(_gen_diagram)
+        fut_chart = executor.submit(_gen_chart)
+
+    refs = fut_refs.result()
+    ref_text = refs if refs else "No references found in the literature dataset."
+    yield f"data: ✅ References collected.\n\n"
+
+    diagram_result = fut_diagram.result()
+    if diagram_result:
+        figures.append(diagram_result)
+        yield f"data: ✅ {detected_model} architecture diagram generated.\n\n"
+    elif detected_model:
+        yield f"data: ⚠️ Could not generate diagram for {detected_model}.\n\n"
     else:
         yield f"data: ℹ️ No specific NN model detected, skipping diagram.\n\n"
-    time.sleep(0.1)
 
-    # --- Step 4: Data chart ---
-    yield f"data: 📊 Step 4/5: Generating literature trend chart...\n\n"
-    try:
-        chart_path = generate_data_chart(topic)
-        if chart_path and os.path.exists(chart_path):
-            figures.append(("literature_trends.png", chart_path, "Literature Research Trends"))
-            yield f"data: ✅ Literature trend chart generated.\n\n"
-        else:
-            yield f"data: ⚠️ Could not generate data chart.\n\n"
-    except Exception as e:
-        yield f"data: ⚠️ Chart error: {str(e)}\n\n"
+    chart_result = fut_chart.result()
+    if chart_result:
+        figures.append(chart_result)
+        yield f"data: ✅ Literature trend chart generated.\n\n"
+    else:
+        yield f"data: ⚠️ Could not generate data chart.\n\n"
+
     time.sleep(0.1)
 
     # --- Step 5: Gemini LaTeX generation ---
@@ -542,6 +762,7 @@ def index():
     return render_template('index.html')
 
 @app.route('/api/thesis', methods=['POST'])
+@login_required
 def api_thesis():
     data = request.json
     prompt = data.get('prompt', '')
@@ -552,18 +773,21 @@ def api_thesis():
     return jsonify({"response": result + refs})
 
 @app.route('/api/thesis/stream')
+@login_required
 def api_thesis_stream():
     """SSE endpoint: streams LaTeX thesis generation word-by-word."""
     topic = request.args.get('topic', '')
     if not topic:
         return jsonify({"error": "No topic provided"}), 400
+    user_name = getattr(request, 'user', {}).get('name', 'User')
     return Response(
-        generate_thesis_stream(topic),
+        generate_thesis_stream(topic, user_name),
         content_type='text/event-stream',
         headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'}
     )
 
 @app.route('/api/thesis/download', methods=['POST'])
+@login_required
 def api_thesis_download():
     """Bundle LaTeX + figures into a .zip and return for download."""
     import zipfile
@@ -583,6 +807,7 @@ def api_thesis_download():
     return send_file(zip_path, as_attachment=True, download_name=f"{filename}.zip", mimetype='application/zip')
 
 @app.route('/api/visualize', methods=['POST'])
+@login_required
 def api_visualize():
     prompt = request.form.get('prompt', '')
     file = request.files.get('file')
@@ -622,6 +847,7 @@ def api_visualize():
             return jsonify({"type": "text", "response": "🚨 No output generated."})
 
 @app.route('/api/document', methods=['POST'])
+@login_required
 def api_document():
     prompt = request.form.get('prompt', '')
     file = request.files.get('file')
@@ -632,8 +858,25 @@ def api_document():
         file.save(path)
         return jsonify({"response": f"✅ Document **{file.filename}** uploaded successfully! Ask me anything about it.", "doc_path": path})
     
-    if not doc_path:
-        return jsonify({"response": "🚨 Please upload a document first."})
+    if not doc_path or doc_path == 'undefined' or doc_path == 'null':
+        # Fallback: Instead of an error, query the built-in literature dataset
+        dataset_refs = get_references(prompt, max_refs=8)
+        if not dataset_refs:
+            return jsonify({"response": "I couldn't find any relevant information in the medical literature dataset."})
+        
+        try:
+            api_key = os.getenv("GEMINI_API_KEY")
+            client = genai.Client(api_key=api_key)
+            sys_prompt = f"""You are an expert academic assistant. Use ONLY these literature references to answer the query.
+            {dataset_refs}
+            
+            User asks: "{prompt}"
+            Give a professional academic answer using markdown."""
+            
+            r = client.models.generate_content(model='gemini-2.5-flash', contents=sys_prompt)
+            return jsonify({"response": r.text + dataset_refs})
+        except Exception as e:
+            return jsonify({"response": f"🚨 Error analyzing dataset: {str(e)}"})
     
     result = read_document_and_answer(prompt, doc_path)
     return jsonify({"response": result, "doc_path": doc_path})
@@ -664,5 +907,11 @@ def test_diagram(model_name):
 if __name__ == "__main__":
     os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
     os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
-    print("Launching Acadbot on http://127.0.0.1:5000")
+
+    # Pre-load the text model at startup to eliminate cold-start latency
+    print("Pre-loading text model at startup...")
+    success, msg = load_text_model()
+    print(f"Text model: {msg}")
+
+    print("Launching Acadbot on http://localhost:5000")
     app.run(debug=False, port=5000)

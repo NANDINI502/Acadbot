@@ -1,6 +1,8 @@
-import torch
-from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
+from transformers import AutoProcessor, Qwen2VLForConditionalGeneration, BitsAndBytesConfig
 from PIL import Image
+from PIL import Image
+
+import torch
 
 # 1. Paths (Update this to wherever you download your fine-tuned model folder from Colab)
 MODEL_DIR = "./qwen-xray-pneumonia"
@@ -12,11 +14,18 @@ print(f"Loading Fine-Tuned Model from: {MODEL_DIR}")
 # 2. Load the processor and the fine-tuned model
 processor = AutoProcessor.from_pretrained(MODEL_DIR)
 
+# Optimize Latency: 4-bit Quantization drastically cuts down load times and speeds up inference
+bnb_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_quant_type="nf4",
+    bnb_4bit_compute_dtype=torch.float16
+)
+
 # Load the base model with the LoRA adapters merged in
 model = Qwen2VLForConditionalGeneration.from_pretrained(
     MODEL_DIR,
-    device_map="auto",
-    torch_dtype=torch.float16 # Standard float16 for inference speed
+    quantization_config=bnb_config,
+    device_map="auto"
 )
 model.eval()
 

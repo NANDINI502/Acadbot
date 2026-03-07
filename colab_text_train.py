@@ -51,8 +51,8 @@ model = prepare_model_for_kbit_training(model)
 
 # For Llama 3 NLP fine-tuning, we target all linear layers to achieve the best linguistic nuance capture
 lora_config = LoraConfig(
-    r=16,
-    lora_alpha=32,
+    r=32,
+    lora_alpha=64,
     target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
     lora_dropout=0.05,
     bias="none",
@@ -77,7 +77,13 @@ def format_chat_template(example):
 
 print("Applying Chat Template logic to dataset and tokenizing...")
 # Map the formatting and drop the original text columns so the Trainer only sees tensors
-train_dataset = dataset["train"].map(format_chat_template, remove_columns=["messages", "text"] if "text" in dataset["train"].column_names else ["messages"])
+full_dataset = dataset["train"].map(format_chat_template, remove_columns=["messages", "text"] if "text" in dataset["train"].column_names else ["messages"])
+
+# Split 10% for evaluation to enable early stopping
+split = full_dataset.train_test_split(test_size=0.1, seed=42)
+train_dataset = split["train"]
+eval_dataset = split["test"]
+print(f"Train: {len(train_dataset)} samples, Eval: {len(eval_dataset)} samples")
 
 # 5. Training Arguments
 training_args = TrainingArguments(
@@ -89,6 +95,11 @@ training_args = TrainingArguments(
     num_train_epochs=3, # 3 epochs allows it to properly memorize the academic terminology
     logging_steps=10,
     save_strategy="epoch",
+    eval_strategy="epoch",
+    load_best_model_at_end=True,
+    metric_for_best_model="eval_loss",
+    lr_scheduler_type="cosine",
+    warmup_ratio=0.06,
     fp16=True, # Standard for free T4 GPUs
     optim="paged_adamw_8bit",
     report_to="none" 
@@ -104,6 +115,7 @@ data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
 trainer = Trainer(
     model=model,
     train_dataset=train_dataset,
+    eval_dataset=eval_dataset,
     data_collator=data_collator,
     args=training_args
 )

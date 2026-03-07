@@ -2,10 +2,73 @@
 // ACADBOT — CLIENT-SIDE LOGIC
 // ============================================================
 
+// ---- Firebase Initialization ----
+const firebaseConfig = {
+    projectId: "acadbot-dev-01",
+    appId: "1:1050183870088:web:8352d4572c680e54bc213d",
+    storageBucket: "acadbot-dev-01.firebasestorage.app",
+    apiKey: "AIzaSyCmr76iwmkbqk6yQ0nm7Sr9d6tmyLcRAyI",
+    authDomain: "acadbot-dev-01.firebaseapp.com",
+    messagingSenderId: "1050183870088"
+};
+
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const provider = new firebase.auth.GoogleAuthProvider();
+
+let currentUser = null;
+
 const MODES = ['welcome', 'thesis', 'visualizer', 'documents'];
 let currentMode = 'welcome';
 let currentChatId = null;
 let docPath = ''; // Stored path for document Q&A
+
+// ---- Auth Listener ----
+auth.onAuthStateChanged((user) => {
+    if (user) {
+        currentUser = user;
+        document.getElementById('login-container').style.display = 'none';
+        document.getElementById('app-container').style.display = 'flex';
+
+        document.getElementById('user-name').textContent = user.displayName;
+        document.getElementById('user-avatar').src = user.photoURL;
+        document.getElementById('user-avatar').style.display = 'block';
+
+        migrateOldChats();
+        switchMode('welcome');
+    } else {
+        currentUser = null;
+        document.getElementById('login-container').style.display = 'flex';
+        document.getElementById('app-container').style.display = 'none';
+
+        document.getElementById('user-name').textContent = 'Guest';
+        document.getElementById('user-avatar').style.display = 'none';
+    }
+});
+
+function signInWithGoogle() {
+    auth.signInWithPopup(provider).catch((error) => {
+        console.error("Login failed:", error);
+        alert("Authentication failed: " + error.message);
+    });
+}
+
+function signOutUser() {
+    if (confirm("Are you sure you want to log out?")) {
+        auth.signOut();
+    }
+}
+
+async function getAuthToken() {
+    if (currentUser) {
+        try {
+            return await currentUser.getIdToken();
+        } catch (e) {
+            console.error("Error getting auth token", e);
+        }
+    }
+    return null;
+}
 
 // ---- Migration ----
 function migrateOldChats() {
@@ -31,17 +94,20 @@ function migrateOldChats() {
 
 // ---- Chat History (localStorage) ----
 function getSessions() {
-    return JSON.parse(localStorage.getItem('chat_sessions') || '[]');
+    if (!currentUser) return [];
+    return JSON.parse(localStorage.getItem(`chat_sessions_${currentUser.uid}`) || '[]');
 }
 function saveSessions(sessions) {
-    localStorage.setItem('chat_sessions', JSON.stringify(sessions));
+    if (!currentUser) return;
+    localStorage.setItem(`chat_sessions_${currentUser.uid}`, JSON.stringify(sessions));
 }
 function getHistory(id) {
-    if (!id) return [];
-    return JSON.parse(localStorage.getItem(`chat_msgs_${id}`) || '[]');
+    if (!currentUser || !id) return [];
+    return JSON.parse(localStorage.getItem(`chat_msgs_${currentUser.uid}_${id}`) || '[]');
 }
 function saveHistory(id, messages) {
-    localStorage.setItem(`chat_msgs_${id}`, JSON.stringify(messages));
+    if (!currentUser || !id) return;
+    localStorage.setItem(`chat_msgs_${currentUser.uid}_${id}`, JSON.stringify(messages));
 }
 function addToHistory(mode, role, content, isImage = false) {
     if (!currentChatId) {
@@ -273,7 +339,8 @@ async function sendThesis() {
     let sessionId = '';
 
     try {
-        const evtSource = new EventSource(`/api/thesis/stream?topic=${encodeURIComponent(prompt)}`);
+        const token = await getAuthToken();
+        const evtSource = new EventSource(`/api/thesis/stream?topic=${encodeURIComponent(prompt)}&token=${token || ''}`);
 
         evtSource.onmessage = function (event) {
             const chunk = event.data;
@@ -291,9 +358,13 @@ async function sendThesis() {
                     dlBtn.style.cssText = 'margin-top:12px;padding:10px 20px;background:linear-gradient(135deg,#00f5d4,#3a86ff);color:#000;border:none;border-radius:8px;cursor:pointer;font-weight:600;font-size:0.9rem;';
                     dlBtn.onclick = async () => {
                         try {
+                            const authToken = await getAuthToken();
+                            const headers = { 'Content-Type': 'application/json' };
+                            if (authToken) headers['Authorization'] = 'Bearer ' + authToken;
+
                             const res = await fetch('/api/thesis/download', {
                                 method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
+                                headers: headers,
                                 body: JSON.stringify({
                                     latex: fullLatex,
                                     session_id: sessionId,
@@ -383,7 +454,15 @@ async function sendVisualizer() {
             fileInput.value = '';
         }
 
-        const res = await fetch('/api/visualize', { method: 'POST', body: formData });
+        const token = await getAuthToken();
+        const headers = {};
+        if (token) headers['Authorization'] = 'Bearer ' + token;
+
+        const res = await fetch('/api/visualize', {
+            method: 'POST',
+            headers: headers,
+            body: formData
+        });
         const data = await res.json();
         hideTyping('visualizer');
 
@@ -416,7 +495,7 @@ async function sendDocument() {
         fileInput.value = '';
     } else if (prompt) {
         formData.append('prompt', prompt);
-        formData.append('doc_path', docPath);
+        formData.append('doc_path', docPath); // Might be empty, which triggers backend fallback
         appendMessage('documents', 'user', prompt);
     } else {
         return;
@@ -426,7 +505,15 @@ async function sendDocument() {
     showTyping('documents');
 
     try {
-        const res = await fetch('/api/document', { method: 'POST', body: formData });
+        const token = await getAuthToken();
+        const headers = {};
+        if (token) headers['Authorization'] = 'Bearer ' + token;
+
+        const res = await fetch('/api/document', {
+            method: 'POST',
+            headers: headers,
+            body: formData
+        });
         const data = await res.json();
         hideTyping('documents');
 
@@ -462,6 +549,5 @@ function newChat() {
 
 // ---- Init ----
 document.addEventListener('DOMContentLoaded', () => {
-    migrateOldChats();
-    switchMode('welcome');
+    // Rely on Firebase auth state listener to trigger load
 });

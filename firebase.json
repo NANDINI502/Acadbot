@@ -1,0 +1,14 @@
+{
+  "auth": {
+    "providers": {
+      "googleSignIn": {
+        "oAuthBrandDisplayName": "Acadbot",
+        "supportEmail": "nandinigupta1608@gmail.com",
+        "authorizedRedirectUris": [
+          "http://localhost:5000",
+          "http://127.0.0.1:5000"
+        ]
+      }
+    }
+  }
+}

@@ -44,8 +44,8 @@ model = prepare_model_for_kbit_training(model)
 
 # For Qwen2, we target linear layers in the attention blocks
 lora_config = LoraConfig(
-    r=16,
-    lora_alpha=32,
+    r=32,
+    lora_alpha=64,
     target_modules=["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
     lora_dropout=0.05,
     bias="none",
@@ -83,9 +83,8 @@ def format_data(example):
     }
 
 print("Formatting Dataset...")
-# Just taking a subset for faster demonstration in Colab. 
-# Remove the .select(range(500)) for full training.
-train_dataset = dataset["train"].select(range(500)).map(format_data, remove_columns=dataset["train"].column_names)
+# Using the FULL training set for maximum accuracy.
+train_dataset = dataset["train"].map(format_data, remove_columns=dataset["train"].column_names)
 eval_dataset = dataset["validation"].map(format_data, remove_columns=dataset["validation"].column_names)
 
 # 5. Collation Function
@@ -117,7 +116,11 @@ training_args = TrainingArguments(
     num_train_epochs=3, # 3 epochs is standard for fine-tuning
     logging_steps=10,
     save_strategy="epoch",
-    evaluation_strategy="epoch",
+    eval_strategy="epoch",
+    load_best_model_at_end=True,
+    metric_for_best_model="eval_loss",
+    lr_scheduler_type="cosine",
+    warmup_ratio=0.06,
     fp16=False,
     bf16=True, # bfloat16 is better for A100/L4 GPUs, fallback to fp16 if T4
     optim="paged_adamw_8bit",

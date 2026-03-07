@@ -1,7 +1,7 @@
 import torch
 import os
-from peft import AutoPeftModelForCausalLM
-from transformers import AutoTokenizer
+from peft import PeftModel
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 
 def generate_section(model, tokenizer, index, topic, section_name, max_tokens=600):
     messages = [
@@ -26,27 +26,32 @@ def generate_section(model, tokenizer, index, topic, section_name, max_tokens=60
     return generated_text.strip()
 
 
-from peft import PeftModel
-from transformers import AutoModelForCausalLM
-
 def main():
     MODEL_DIR = "./qwen-xray-researcher"
-    BASE_MODEL = "Qwen/Qwen2.5-1.5B-Instruct"  # or whichever base model you used!
+    BASE_MODEL = "Qwen/Qwen2.5-1.5B-Instruct"  # Base model for PEFT
     TOPIC = "Vision Transformers for Weakly Supervised Pneumonia Detection"
     OUTPUT_FILE = "qwen_thesis_draft.md"
     
-    print(f"Loading Base Model...")
+    print(f"Loading Base Qwen Model...")
     tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
+
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_use_double_quant=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.float16
+    )
     
     # Load base model first
     base_model = AutoModelForCausalLM.from_pretrained(
         BASE_MODEL,
-        torch_dtype=torch.float16,
-        #device_map="auto",
-        low_cpu_mem_usage=True
+        quantization_config=bnb_config,
+        device_map="auto",
+        low_cpu_mem_usage=True,
+        attn_implementation="sdpa"
     )
     
-    print(f"Loading Adapter from {MODEL_DIR}...")
+    print(f"Loading Qwen LoRA Adapter from {MODEL_DIR}...")
     model = PeftModel.from_pretrained(base_model, MODEL_DIR)
     model.eval()
 
