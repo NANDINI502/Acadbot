@@ -410,7 +410,7 @@ async function sendThesis() {
                     escapeHtml(fullLatex) +
                     '</div></div>';
             } else {
-                displayText += decoded + '\n';
+                displayText += decoded;
                 bubble.innerHTML = formatMarkdown(displayText);
             }
             scrollToBottom('thesis');
