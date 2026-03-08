@@ -731,20 +731,33 @@ CONTENT AUTHENTICITY:
 - Compare your results to baselines with nuanced analysis, not just "our method is better"
 - Include at least one paragraph discussing unexpected results or challenges faced
 - Mention practical implications ("This could reduce radiologist workload by...")"""
-
-    try:
-        client = genai.Client(api_key=api_key)
-        response = client.models.generate_content_stream(
-            model='gemini-2.5-flash',
-            contents=latex_prompt,
-            config={'max_output_tokens': 15000}
-        )
-        for chunk in response:
-            if chunk.text:
-                safe_text = chunk.text.replace('\n', '\\n')
-                yield f"data: {safe_text}\n\n"
-    except Exception as e:
-        yield f"data: 🚨 Gemini API error: {str(e)}\n\n"
+    max_retries = 3
+    retry_count = 0
+    while retry_count < max_retries:
+        try:
+            client = genai.Client(api_key=api_key)
+            response = client.models.generate_content_stream(
+                model='gemini-2.5-flash',
+                contents=latex_prompt,
+                config={'max_output_tokens': 15000}
+            )
+            for chunk in response:
+                if chunk.text:
+                    safe_text = chunk.text.replace('\n', '\\n')
+                    yield f"data: {safe_text}\n\n"
+            break # Success, exit the retry loop
+        except Exception as e:
+            error_msg = str(e)
+            if "429" in error_msg:
+                retry_count += 1
+                yield f"data: \\n\\n%---- SYSTEM ALERT ----%\\n"
+                yield f"data: \\n\\n% API Quota Exhausted (Error 429).\\n"
+                yield f"data: \\n\\n% Waiting 60 seconds for the free-tier bucket to refill... (Attempt {retry_count}/{max_retries})\\n"
+                time.sleep(60)
+                yield f"data: \\n\\n% Resuming generation!\\n\\n"
+            else:
+                yield f"data: 🚨 Gemini API error: {error_msg}\n\n"
+                break
 
     # Store figures for zip bundling
     _thesis_figures[session_id] = figures
