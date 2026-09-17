@@ -9,7 +9,7 @@ An AI-powered academic research assistant that generates complete IEEE-format La
   - Gemini API for structuring into publication-ready IEEE LaTeX format
   - Auto-generated NN architecture diagrams (DenseNet121, ResNet50, VGG16, MobileNetV2, InceptionV3)
   - Auto-generated literature trend charts from your dataset
-  - Humanized writing style to avoid AI detection
+  - Natural, readable prose output
   - Download as `.zip` (LaTeX + figures)
 
 - **📊 Visualizer** — Generate charts, graphs, and 3D neural network architecture diagrams
